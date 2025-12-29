@@ -2,8 +2,8 @@ import os, subprocess, asyncio, zipfile, re
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 
-BOT_TOKEN = os.getenv("8590905884:AAGUQ-pKMBmQY82iHNNHrxROGgoKM8uRm_0")
-ADMIN_IDS = list(map(int, os.getenv("7129426550", "").split(",")))
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
 
 BASE_DIR = "downloads"
 os.makedirs(BASE_DIR, exist_ok=True)
@@ -27,7 +27,7 @@ SUBJECT_RULES = {
 }
 
 def is_admin(uid):
-    return uid in 7129426550
+    return uid in ADMIN_IDS
 
 def detect_subject(text):
     for subject, keywords in SUBJECT_RULES.items():
