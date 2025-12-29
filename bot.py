@@ -26,7 +26,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__)
 
 # --- HELPER: RESTRICT ACCESS ---
 def restricted(func):
@@ -49,8 +49,8 @@ async def upload_progress(current, total, message, last_update_time):
         try:
             await message.edit_text(f"📤 Uploading: {percent:.1f}%")
             last_update_time[0] = now
-        except Exception:
-            pass  # Ignore errors if message was deleted
+        except Exception as e:
+            logger.warning(f"Failed to update progress: {e}")
 
 # --- HELPER: VIDEO DOWNLOADER (FFMPEG) ---
 def download_m3u8_sync(url, output_path):
@@ -69,9 +69,14 @@ def download_m3u8_sync(url, output_path):
     
     try:
         # Run ffmpeg and hide the huge console output
-        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        logger.info(f"FFmpeg succeeded for {url}")
         return True
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        logger.error(f"FFmpeg failed for {url}: {e}")
+        return False
+    except FileNotFoundError:
+        logger.error("FFmpeg not found. Ensure it's installed and in PATH.")
         return False
 
 # --- MAIN COMMANDS ---
@@ -97,12 +102,21 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 2. Download the Text File
     file_path = f"temp_{document.file_name}"
-    new_file = await document.get_file()
-    await new_file.download_to_drive(file_path)
+    try:
+        new_file = await document.get_file()
+        await new_file.download_to_drive(file_path)
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Failed to download file: {e}")
+        return
 
     # 3. Parse Content
-    with open(file_path, "r", encoding="utf-8") as f:
-        content = f.read()
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Error reading file: {e}")
+        os.remove(file_path)
+        return
     
     # Extract Title and URL using Regex
     # Matches: "Any Title Here:https://link.m3u8"
@@ -114,7 +128,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.remove(file_path)
         return
 
-await status_msg.edit_text(f"✅ Found {len(matches)} videos. Starting processing...")
+    await status_msg.edit_text(f"✅ Found {len(matches)} videos. Starting processing...")
     
     # Create Downloads Folder
     if os.path.exists(DOWNLOAD_DIR):
@@ -172,27 +186,36 @@ await status_msg.edit_text(f"✅ Found {len(matches)} videos. Starting processin
             success = await loop.run_in_executor(None, download_m3u8_sync, vid['url'], vid['path'])
             
             if success:
-                # B. Upload Video
-                await msg.edit_text("📤 Uploading...")
-                last_time = [time.time()]
-                try:
-                    with open(vid['path'], 'rb') as video_file:
-                        await context.bot.send_video(
-                            chat_id=update.effective_chat.id,
-                            video=video_file,
-                            caption=f"🎥 {vid['title']}",
-                            width=1280, height=720,  # Optional: assumes 720p
-                            supports_streaming=True,
-                            read_timeout=300, 
-                            write_timeout=300,
-                            pool_timeout=300,
-                            progress=upload_progress,
-                            progress_args=(msg, last_time)
-                        )
-                    await msg.delete()  # Clean up status message
-                    downloaded_files.append(vid['path'])
-                except Exception as e:
-                    await msg.edit_text(f"❌ Upload Error: {e}")
+                # Check if file was created and has size > 0
+                if os.path.exists(vid['path']) and os.path.getsize(vid['path']) > 0:
+                    # B. Upload Video
+                    await msg.edit_text("📤 Uploading...")
+                    last_time = [time.time()]
+                    try:
+                        with open(vid['path'], 'rb') as video_file:
+                            await context.bot.send_video(
+                                chat_id=update.effective_chat.id,
+                                video=video_file,
+                                caption=f"🎥 {vid['title']}",
+                                width=1280, height=720,  # Optional: assumes 720p
+                                supports_streaming=True,
+                                read_timeout=300, 
+                                write_timeout=300,
+                                pool_timeout=300,
+                                progress=upload_progress,
+                                progress_args=(msg, last_time)
+                            )
+                        await msg.delete()  # Clean up status message
+                        downloaded_files.append(vid['path'])
+                    except Exception as e:
+                        logger.error(f"Video upload failed for {vid['title']}: {e}")
+                        await msg.edit_text(f"❌ Upload Error: {e}")
+                        # Cleanup failed download
+                        if os.path.exists(vid['path']):
+                            os.remove(vid['path'])
+                else:
+                    await msg.edit_text("❌ Download Failed (File not created or empty).")
+                    logger.warning(f"Downloaded file {vid['path']} is missing or empty.")
             else:
                 await msg.edit_text("❌ Download Failed (Stream might be dead).")
 
@@ -200,15 +223,21 @@ await status_msg.edit_text(f"✅ Found {len(matches)} videos. Starting processin
         if downloaded_files:
             zip_msg = await context.bot.send_message(chat_id=update.effective_chat.id, text=f"🤐 Zipping Module {module}...")
             
-            zip_filename = f"{module}_Complete.zip"
-            zip_path = os.path.join(DOWNLOAD_DIR, zip_filename)
+            zip_base = os.path.join(DOWNLOAD_DIR, f"{module}_Complete")
+            zip_path = zip_base + '.zip'
             
             # Create ZIP
-            shutil.make_archive(zip_path.replace('.zip', ''), 'zip', os.path.join(DOWNLOAD_DIR, module))
-
-# Upload ZIP
             try:
-                await zip_msg.edit_text(f"📤 Uploading {zip_filename}...")
+                shutil.make_archive(zip_base, 'zip', os.path.join(DOWNLOAD_DIR, module))
+                logger.info(f"ZIP created for module {module}: {zip_path}")
+            except Exception as e:
+                logger.error(f"ZIP creation failed for {module}: {e}")
+                await zip_msg.edit_text(f"❌ ZIP Creation Failed: {e}")
+                continue
+
+            # Upload ZIP
+            try:
+                await zip_msg.edit_text(f"📤 Uploading {os.path.basename(zip_path)}...")
                 with open(zip_path, 'rb') as zip_file:
                     await context.bot.send_document(
                         chat_id=update.effective_chat.id,
@@ -218,19 +247,32 @@ await status_msg.edit_text(f"✅ Found {len(matches)} videos. Starting processin
                         write_timeout=600
                     )
                 await zip_msg.delete()
+                os.remove(zip_path)  # Cleanup ZIP file after upload
+                logger.info(f"ZIP uploaded and cleaned for module {module}")
             except Exception as e:
+                logger.error(f"ZIP upload failed for {module}: {e}")
                 await zip_msg.edit_text(f"❌ ZIP Upload Failed (File might be too big for bot): {e}")
+                if os.path.exists(zip_path):
+                    os.remove(zip_path)  # Attempt cleanup even on failure
 
         # D. Cleanup Module Folder
-        shutil.rmtree(os.path.join(DOWNLOAD_DIR, module))
+        try:
+            shutil.rmtree(os.path.join(DOWNLOAD_DIR, module))
+            logger.info(f"Cleaned up module folder: {module}")
+        except Exception as e:
+            logger.error(f"Error removing module folder {module}: {e}")
 
     await context.bot.send_message(chat_id=update.effective_chat.id, text="✅ All Tasks Completed Successfully!")
     
     # Final Cleanup
-    if os.path.exists(DOWNLOAD_DIR):
-        shutil.rmtree(DOWNLOAD_DIR)
+    try:
+        if os.path.exists(DOWNLOAD_DIR):
+            shutil.rmtree(DOWNLOAD_DIR)
+            logger.info("Final cleanup completed.")
+    except Exception as e:
+        logger.error(f"Error during final cleanup: {e}")
 
-if name == 'main':
+if __name__ == '__main__':
     # Startup Checks
     if not BOT_TOKEN:
         print("❌ ERROR: BOT_TOKEN is missing from Environment Variables.")
