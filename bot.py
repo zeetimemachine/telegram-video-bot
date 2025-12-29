@@ -50,7 +50,7 @@ async def upload_progress(current, total, message, last_update_time):
             await message.edit_text(f"📤 Uploading: {percent:.1f}%")
             last_update_time[0] = now
         except Exception:
-            pass # Ignore errors if message was deleted
+            pass  # Ignore errors if message was deleted
 
 # --- HELPER: VIDEO DOWNLOADER (FFMPEG) ---
 def download_m3u8_sync(url, output_path):
@@ -62,7 +62,7 @@ def download_m3u8_sync(url, output_path):
         'ffmpeg',
         '-y',                 # Overwrite output file
         '-i', url,            # Input URL
-        '-bsf:a', 'aac_adtstoasc', # Fix audio bitstream for MP4
+        '-bsf:a', 'aac_adtstoasc',  # Fix audio bitstream for MP4
         '-c', 'copy',         # Copy codec (Fastest, no re-encoding)
         output_path           # Output file
     ]
@@ -93,7 +93,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Please send a valid .txt file.")
         return
 
-    status_msg = await update.message.reply_text("📂 analyzing file...")
+    status_msg = await update.message.reply_text("📂 Analyzing file...")
     
     # 2. Download the Text File
     file_path = f"temp_{document.file_name}"
@@ -118,11 +118,11 @@ await status_msg.edit_text(f"✅ Found {len(matches)} videos. Starting processin
     
     # Create Downloads Folder
     if os.path.exists(DOWNLOAD_DIR):
-        shutil.rmtree(DOWNLOAD_DIR) # Clean start
+        shutil.rmtree(DOWNLOAD_DIR)  # Clean start
     os.makedirs(DOWNLOAD_DIR)
 
     # Group by Module (M01, M02, etc.)
-    # Structure: module_map = { "M01": [ ("Title", "Path"), ... ], "M02": ... }
+    # Structure: module_map = { "M01": [ {"title": ..., "url": ..., "path": ..., "filename": ...}, ... ], ... }
     module_map = {}
 
     for title, url in matches:
@@ -152,7 +152,7 @@ await status_msg.edit_text(f"✅ Found {len(matches)} videos. Starting processin
             "filename": output_filename
         })
 
-    os.remove(file_path) # Cleanup input file
+    os.remove(file_path)  # Cleanup input file
 
     # --- PROCESS EACH MODULE ---
     for module, videos in module_map.items():
@@ -181,7 +181,7 @@ await status_msg.edit_text(f"✅ Found {len(matches)} videos. Starting processin
                             chat_id=update.effective_chat.id,
                             video=video_file,
                             caption=f"🎥 {vid['title']}",
-                            width=1280, height=720, # Optional: assumes 720p
+                            width=1280, height=720,  # Optional: assumes 720p
                             supports_streaming=True,
                             read_timeout=300, 
                             write_timeout=300,
@@ -189,7 +189,7 @@ await status_msg.edit_text(f"✅ Found {len(matches)} videos. Starting processin
                             progress=upload_progress,
                             progress_args=(msg, last_time)
                         )
-                    await msg.delete() # Clean up status message
+                    await msg.delete()  # Clean up status message
                     downloaded_files.append(vid['path'])
                 except Exception as e:
                     await msg.edit_text(f"❌ Upload Error: {e}")
@@ -205,8 +205,8 @@ await status_msg.edit_text(f"✅ Found {len(matches)} videos. Starting processin
             
             # Create ZIP
             shutil.make_archive(zip_path.replace('.zip', ''), 'zip', os.path.join(DOWNLOAD_DIR, module))
-            
-            # Upload ZIP
+
+# Upload ZIP
             try:
                 await zip_msg.edit_text(f"📤 Uploading {zip_filename}...")
                 with open(zip_path, 'rb') as zip_file:
