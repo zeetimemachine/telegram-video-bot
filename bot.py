@@ -8,8 +8,8 @@ from telegram import Update, InputFile
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
 # --- CONFIGURATION ---
-BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
-ADMIN_ID = 123456789  # Replace with your numeric Telegram ID
+BOT_TOKEN = "8590905884:AAGUQ-pKMBmQY82iHNNHrxROGgoKM8uRm_0"
+ADMIN_ID = 7129426550  # Replace with your numeric Telegram ID
 DOWNLOAD_DIR = "downloads"
 
 # Setup Logging
