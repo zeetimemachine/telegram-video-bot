@@ -2,12 +2,19 @@ import os, subprocess, asyncio, zipfile, re
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 
+# ---------- CONFIG ----------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
+
+ADMIN_IDS = (
+    list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
+    if os.getenv("ADMIN_IDS")
+    else []
+)
 
 BASE_DIR = "downloads"
 os.makedirs(BASE_DIR, exist_ok=True)
 
+# ---------- SUBJECT RULES ----------
 SUBJECT_RULES = {
     "Digital_Electronics": [
         "Digital", "Logic", "Gate", "K-map", "ADC", "DAC", "Flip", "Counter"
@@ -26,24 +33,26 @@ SUBJECT_RULES = {
     ]
 }
 
-def is_admin(uid):
+# ---------- HELPERS ----------
+def is_admin(uid: int) -> bool:
     return uid in ADMIN_IDS
 
-def detect_subject(text):
+def detect_subject(text: str) -> str:
     for subject, keywords in SUBJECT_RULES.items():
         for kw in keywords:
             if kw.lower() in text.lower():
                 return subject
     return "Miscellaneous"
 
-def detect_module(text):
-    match = re.match(r"(M\d+)", text.strip())
+def detect_module(text: str) -> str:
+    match = re.match(r"(M\d+)", text.strip(), re.IGNORECASE)
     return match.group(1) if match else "MISC"
 
-def progress_bar(p):
+def progress_bar(p: int) -> str:
     blocks = int(p / 10)
     return "█" * blocks + "░" * (10 - blocks)
 
+# ---------- HANDLER ----------
 async def handle_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("🚫 Private bot")
@@ -57,21 +66,28 @@ async def handle_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await file.download_to_drive(txt_path)
 
     with open(txt_path, "r", encoding="utf-8", errors="ignore") as f:
-        lines = [l for l in f if ".m3u8" in l]
+        lines = [l.strip() for l in f if ".m3u8" in l]
 
     total = len(lines)
-    done = failed = 0
-    processed = 0
+    if total == 0:
+        await status.edit_text("❌ No .m3u8 links found")
+        return
+
+    done = failed = processed = 0
     index = {}
 
     for line in lines:
         processed += 1
+        subject = module = safe_title = "Unknown"
+
         try:
             title, url = line.split(":", 1)
+
             subject = detect_subject(title)
             module = detect_module(title)
 
-            safe_title = title.replace(" ", "_").replace("/", "")
+            safe_title = re.sub(r"[^\w\-]", "_", title)
+
             subject_dir = os.path.join(BASE_DIR, subject, module)
             os.makedirs(subject_dir, exist_ok=True)
 
@@ -87,7 +103,8 @@ async def handle_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await asyncio.to_thread(subprocess.run, cmd, timeout=300)
 
-            await update.message.reply_video(video=open(out, "rb"), caption=safe_title)
+            with open(out, "rb") as v:
+                await update.message.reply_video(video=v, caption=safe_title)
 
             index.setdefault((subject, module), []).append(url.strip())
             done += 1
@@ -96,6 +113,7 @@ async def handle_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             failed += 1
 
         percent = int((processed / total) * 100)
+
         await status.edit_text(
             f"📚 Subject: {subject}\n"
             f"🧩 Module: {module}\n"
@@ -105,7 +123,7 @@ async def handle_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"❌ Failed: {failed}"
         )
 
-    # PLAYLIST + ZIP
+    # ---------- PLAYLIST + ZIP ----------
     for (subject, module), urls in index.items():
         mdir = os.path.join(BASE_DIR, subject, module)
 
@@ -119,17 +137,19 @@ async def handle_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for f in os.listdir(mdir):
                 z.write(os.path.join(mdir, f), arcname=f)
 
-        await update.message.reply_document(
-            document=open(zip_path, "rb"),
-            caption=f"📦 {subject} - {module}"
-        )
+        with open(zip_path, "rb") as zf:
+            await update.message.reply_document(
+                document=zf,
+                caption=f"📦 {subject} - {module}"
+            )
 
     await status.edit_text("✅ ALL SUBJECTS COMPLETED")
 
+# ---------- MAIN ----------
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_txt))
+    app.add_handler(MessageHandler(filters.Document.TXT, handle_txt))
     await app.run_polling()
 
-if name == "main":
+if __name__ == "__main__":
     asyncio.run(main())
